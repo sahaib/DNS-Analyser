@@ -133,6 +133,56 @@ export const dnsAnalyzerEvents = {
       context,
       timestamp: new Date().toISOString()
     })
+  },
+
+  // Input Validation Events
+  inputValidation: (isValid: boolean, errorType?: string) => {
+    posthog.capture('input_validation', {
+      is_valid: isValid,
+      error_type: errorType,
+      timestamp: new Date().toISOString()
+    })
+  },
+
+  // Record Parsing Events
+  recordParsing: (success: boolean, lineCount: number, parseErrors?: string[]) => {
+    posthog.capture('record_parsing', {
+      success,
+      line_count: lineCount,
+      error_count: parseErrors?.length || 0,
+      errors: parseErrors,
+      timestamp: new Date().toISOString()
+    })
+  },
+
+  // User Interaction Events
+  userInteraction: (element: string, action: string, details?: any) => {
+    posthog.capture('user_interaction', {
+      element,
+      action,
+      details,
+      timestamp: new Date().toISOString()
+    })
+  },
+
+  // Feature Usage Events
+  featureUsage: (featureName: string, successful: boolean, duration?: number) => {
+    posthog.capture('feature_usage', {
+      feature: featureName,
+      successful,
+      duration_ms: duration,
+      timestamp: new Date().toISOString()
+    })
+  },
+
+  // Performance Metrics
+  performanceMetric: (metricName: string, value: number, context?: any) => {
+    posthog.capture('performance_metric', {
+      metric: metricName,
+      value,
+      context,
+      timestamp: new Date().toISOString()
+    })
   }
 }
 

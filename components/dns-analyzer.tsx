@@ -54,6 +54,12 @@ export function DnsAnalyzer() {
     const startTime = performance.now();
     setIsAnalyzing(true)
     
+    // Validate input
+    if (!zoneFile.trim()) {
+      dnsAnalyzerEvents.inputValidation(false, 'empty_input');
+      return;
+    }
+
     // Track analysis start with file size
     dnsAnalyzerEvents.startAnalysis(
       zoneFile.split('\n')[0],
@@ -63,25 +69,35 @@ export function DnsAnalyzer() {
     // Parse the zone file
     const lines = zoneFile.split('\n')
     const records: DNSRecord[] = []
+    const parseErrors: string[] = []
     
-    lines.forEach(line => {
+    lines.forEach((line, index) => {
       if (line.trim() && !line.startsWith(';')) {
         const parts = line.split(/\s+/)
-        if (parts.length >= 5) {
-          const record: DNSRecord = {
-            name: parts[0],
-            ttl: parseInt(parts[1]),
-            class: parts[2],
-            type: parts[3],
-            value: parts.slice(4).join(' '),
-            findings: [],
-            recordCategory: categorizeRecord(parts[3], parts[0], parts.slice(4).join(' '))
+        try {
+          if (parts.length >= 5) {
+            const record: DNSRecord = {
+              name: parts[0],
+              ttl: parseInt(parts[1]),
+              class: parts[2],
+              type: parts[3],
+              value: parts.slice(4).join(' '),
+              findings: [],
+              recordCategory: categorizeRecord(parts[3], parts[0], parts.slice(4).join(' '))
+            }
+            record.findings = analyzeRecord(record)
+            records.push(record)
+          } else {
+            parseErrors.push(`Line ${index + 1}: Invalid record format`)
           }
-          record.findings = analyzeRecord(record)
-          records.push(record)
+        } catch (error: any) {
+          parseErrors.push(`Line ${index + 1}: ${error.message}`)
         }
       }
     })
+
+    // Track parsing results
+    dnsAnalyzerEvents.recordParsing(parseErrors.length === 0, lines.length, parseErrors)
 
     // Analyze records
     const analysis: AnalysisResult = {
@@ -120,18 +136,12 @@ export function DnsAnalyzer() {
       dnsAnalyzerEvents.cloudServiceDetected(service, 'DNS')
     })
 
-    // Track analysis completion with all metrics
-    dnsAnalyzerEvents.completeAnalysis(
-      zoneFile.split('\n')[0],
-      {
-        recordCount: analysis.records.length,
-        securityIssues: analysis.securityIssues,
-        cloudServices: analysis.cloudServices,
-        environments: analysis.environments,
-        duration: performance.now() - startTime
-      }
-    )
-    
+    // Track performance metric
+    dnsAnalyzerEvents.performanceMetric('analysis_duration', performance.now() - startTime, {
+      record_count: records.length,
+      error_count: parseErrors.length
+    })
+
     setAnalysis(analysis)
     setIsAnalyzing(false)
   }
@@ -139,30 +149,45 @@ export function DnsAnalyzer() {
   const handleExport = () => {
     if (!analysis) return;
 
+    const startTime = performance.now();
     const csvContent = generateCSV(analysis);
     
-    // Track export with enhanced metrics
-    dnsAnalyzerEvents.exportReport('csv', {
-      recordCount: analysis.records.length,
-      fileSize: new Blob([csvContent]).size,
-      includedSections: ['records', 'security', 'email', 'cloud']
-    })
+    try {
+      // Track export with enhanced metrics
+      dnsAnalyzerEvents.exportReport('csv', {
+        recordCount: analysis.records.length,
+        fileSize: new Blob([csvContent]).size,
+        includedSections: ['records', 'security', 'email', 'cloud']
+      })
 
-    // Create blob and download
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'dns-records-analysis.csv';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    window.URL.revokeObjectURL(url);
+      // Track feature usage
+      dnsAnalyzerEvents.featureUsage('export_csv', true, performance.now() - startTime)
+
+      // Create blob and download
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'dns-records-analysis.csv';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(url);
+    } catch (error: any) {
+      dnsAnalyzerEvents.errorOccurred('export_error', error.message, {
+        recordCount: analysis.records.length
+      })
+    }
   };
 
-  // Track tab views
+  // Track tab views with more context
   const handleTabChange = (tab: string) => {
     dnsAnalyzerEvents.tabViewed(tab)
+    dnsAnalyzerEvents.userInteraction('tab_navigation', 'view', {
+      tab,
+      hasAnalysis: !!analysis,
+      recordCount: analysis?.records.length
+    })
   }
 
   return (
