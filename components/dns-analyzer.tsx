@@ -12,6 +12,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { AnimatedCard, CardBody } from "@/components/ui/animated-card"
 import { Spotlight } from "@/components/ui/spotlight"
 import { BackgroundGradient } from "@/components/ui/background-gradient"
+import { dnsAnalyzerEvents } from '@/lib/posthog'
 
 interface DNSRecord {
   name: string
@@ -50,7 +51,14 @@ export function DnsAnalyzer() {
   const [isAnalyzing, setIsAnalyzing] = useState(false)
 
   const analyzeDns = async () => {
+    const startTime = performance.now();
     setIsAnalyzing(true)
+    
+    // Track analysis start with file size
+    dnsAnalyzerEvents.startAnalysis(
+      zoneFile.split('\n')[0],
+      new Blob([zoneFile]).size
+    )
     
     // Parse the zone file
     const lines = zoneFile.split('\n')
@@ -88,6 +96,42 @@ export function DnsAnalyzer() {
       serviceMapping: mapServices(records)
     }
     
+    // Track record types
+    Object.entries(analysis.recordCounts).forEach(([type, count]) => {
+      dnsAnalyzerEvents.recordTypeDetected(type, count)
+    })
+
+    // Track security issues
+    analysis.securityIssues.forEach(issue => {
+      const severity = determineSeverity(issue)
+      dnsAnalyzerEvents.securityIssueDetected(issue, zoneFile.split('\n')[0], severity)
+    })
+
+    // Track email configuration
+    dnsAnalyzerEvents.emailConfigAnalyzed({
+      hasSPF: analysis.emailConfig.hasSPF,
+      hasDKIM: analysis.emailConfig.hasDKIM,
+      hasDMARC: analysis.emailConfig.hasDMARC,
+      mxRecordsCount: analysis.emailConfig.mxRecords.length
+    })
+
+    // Track cloud services
+    analysis.cloudServices.forEach(service => {
+      dnsAnalyzerEvents.cloudServiceDetected(service, 'DNS')
+    })
+
+    // Track analysis completion with all metrics
+    dnsAnalyzerEvents.completeAnalysis(
+      zoneFile.split('\n')[0],
+      {
+        recordCount: analysis.records.length,
+        securityIssues: analysis.securityIssues,
+        cloudServices: analysis.cloudServices,
+        environments: analysis.environments,
+        duration: performance.now() - startTime
+      }
+    )
+    
     setAnalysis(analysis)
     setIsAnalyzing(false)
   }
@@ -95,30 +139,15 @@ export function DnsAnalyzer() {
   const handleExport = () => {
     if (!analysis) return;
 
-    // Create CSV header
-    const csvRows = [
-      ['Name', 'TTL', 'Type', 'Value', 'Purpose', 'Security Status', 'Analysis'].join(',')
-    ];
-
-    // Add record data
-    analysis.records.forEach(record => {
-      const securityStatus = record.findings.length > 0 
-        ? record.findings.join('; ') 
-        : 'Safe';
-
-      csvRows.push([
-        record.name,
-        record.ttl,
-        record.type,
-        record.value,
-        getRecordPurpose(record.type, record.name, record.value),
-        securityStatus,
-        getDetailedAnalysis(record)
-      ].map(field => `"${String(field).replace(/"/g, '""')}"`).join(','));
-    });
-
-    const csvContent = csvRows.join('\n');
+    const csvContent = generateCSV(analysis);
     
+    // Track export with enhanced metrics
+    dnsAnalyzerEvents.exportReport('csv', {
+      recordCount: analysis.records.length,
+      fileSize: new Blob([csvContent]).size,
+      includedSections: ['records', 'security', 'email', 'cloud']
+    })
+
     // Create blob and download
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = window.URL.createObjectURL(blob);
@@ -130,6 +159,11 @@ export function DnsAnalyzer() {
     document.body.removeChild(a);
     window.URL.revokeObjectURL(url);
   };
+
+  // Track tab views
+  const handleTabChange = (tab: string) => {
+    dnsAnalyzerEvents.tabViewed(tab)
+  }
 
   return (
     <motion.div
@@ -211,7 +245,7 @@ export function DnsAnalyzer() {
                       animate={{ opacity: 1, height: "auto" }}
                       exit={{ opacity: 0, height: 0 }}
                     >
-                      <Tabs defaultValue="overview" className="w-full">
+                      <Tabs defaultValue="overview" className="w-full" onValueChange={handleTabChange}>
                         <TabsList className="w-full justify-start bg-white/5 border-b border-white/10">
                           <TabsTrigger value="overview">Overview</TabsTrigger>
                           <TabsTrigger value="records">Records</TabsTrigger>
@@ -797,5 +831,38 @@ function getDetailedAnalysis(record: DNSRecord): string {
   }
 
   return analysis.trim()
+}
+
+// Helper function to determine security issue severity
+function determineSeverity(issue: string): 'low' | 'medium' | 'high' {
+  if (issue.includes('exposed') || issue.includes('risk')) return 'high'
+  if (issue.includes('unusual') || issue.includes('misconfigured')) return 'medium'
+  return 'low'
+}
+
+// Helper function to generate CSV content
+function generateCSV(analysis: AnalysisResult): string {
+  const csvRows = [
+    ['Name', 'TTL', 'Type', 'Value', 'Purpose', 'Security Status', 'Analysis'].join(',')
+  ];
+
+  // Add record data
+  analysis.records.forEach(record => {
+    const securityStatus = record.findings.length > 0 
+      ? record.findings.join('; ') 
+      : 'Safe';
+
+    csvRows.push([
+      record.name,
+      record.ttl,
+      record.type,
+      record.value,
+      getRecordPurpose(record.type, record.name, record.value),
+      securityStatus,
+      getDetailedAnalysis(record)
+    ].map(field => `"${String(field).replace(/"/g, '""')}"`).join(','));
+  });
+
+  return csvRows.join('\n');
 }
 
